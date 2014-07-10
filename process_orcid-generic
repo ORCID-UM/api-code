@@ -1,0 +1,229 @@
+#!/usr/bin/perl
+#
+#Here is a summary of what this script does:
+# (1) This script reads a file with the list of users to create ORCID iDs for. 
+# (2) Parses the rows in the file for lastname, firstname, email, and other email.
+# (3) Creates an xml file with the just-parsed values.
+# (4) Constructs a request for an ID including the xml file just constructed, and issues it using curl.
+# (5) Parses the ORCID API's response and stores it in a database called: "orcidrecords". This will contain an 
+#     iD or an error.  For errors that cannot be parsed, the script will output the error to the user.
+#
+#Here is the definition of the table: ( You'll have to create this )
+#  Column   |          Type          | Modifiers 
+#-----------+------------------------+-----------
+# date      | character varying(100) | 
+# lastname  | character varying(250) | 
+# firstname | character varying(250) | 
+# email     | character varying(250) | 
+# id        | text                   | 
+#
+#The date field contains the date(YYYYY-MM-DD HH:MM:SS) the iD was requested.
+#The id field will contain the iD or the error message returned from the ORCID API.
+#
+#After the request is made the results are stored in the "orcidrecords" table, and if an 
+#unparsable response from ORCID is received, the script will output it to the user.
+#
+#Go to the GLOBAL VARIABLES section to setup the script
+#
+BEGIN
+{
+  require "strict.pm";
+  strict::import();
+}
+
+# ----------------------------------------------------------------------
+#               start of MAIN
+# ----------------------------------------------------------------------
+
+use Encode;
+use utf8;
+use DBI;
+use File::Path;
+
+use LWP::Simple;
+use LWP::UserAgent;
+use Getopt::Std;
+
+####### START GLOBAL VARIABLES ###################
+
+#This is the directory where this scrip lives, 
+#and the template xml file lives.  This script should have 
+#write permissions to this directory.
+my $workingDir = '/l1/bin/orcid';
+
+#The file to process.  This is a tab delimited file in the following format
+#lastname<tab>firstname<tab>email<tab>other_email<tab>userTitle<return>
+my $id_file = qq{$workingDir/ids};
+
+#The template xml file needed to construct request.
+my $xml_file = qq{$workingDir/xml};
+
+#Token value need to make request
+my $token = 'access_token_you_requested'; 
+
+#The ORCID http
+#In sandbox, use: http://api.sandbox-1.orcid.org/orcid-profile
+#In production use: http://api.orcid.org/orcid-profile
+my $orcid_http = 'http://api.sandbox-1.orcid.org/orcid-profile';
+
+#Database setup
+my $dbname = qq{dbi:Pg:dbname=orcid-db};
+my $dbuser = qq{username};
+my $dbpassword = qq{password};
+
+####### END GLOBAL VARIABLES #######################
+
+
+#Get Local time
+my ($sec,$min,$hour,$mday,$mon,$year) = localtime;
+$year = $year+1900;
+$mon += 1;
+if (length($mon)  == 1) {$mon = "0$mon";}
+if (length($mday) == 1) {$mday = "0$mday";}
+
+if (length($sec) == 1) {$sec = "0$sec";}
+if (length($min) == 1) {$min = "0$min";}
+if (length($hour) == 1) {$hour = "0$hour";}
+
+my $today = "$year-$mon-$mday $hour:$min:$sec";
+
+my $connection = qq{dbi:Pg:dbname=$dbname};
+my $dbhP = DBI->connect($connection, $dbuser, $dbpassword);
+
+&ProcessId();
+
+$dbhP->disconnect;
+exit;
+
+################################################################################################
+
+sub ProcessId
+  {
+
+    #Read the file with users
+    my $data = &ReadFile( $id_file);
+
+    my @values = split ( /\n/, $data );
+
+    foreach my $value ( @values )
+    {
+      my @data = split ( /\t/, $value );
+      my $last = $data[0];
+      $last =~ s,(.*?)\,.*,$1,;
+
+      my $first = $data[0];
+      $first =~ s,.*?\,(.*),$1,;
+
+      my $email = $data[1];
+      my $email_other = $data[2];
+
+      my $xml = &ReadFile ( $xml_file );
+      
+      #clean up the data
+      $last =~ s,\",,gs;
+      $first =~ s,\",,gs;
+      $first =~ s,\n,,gs;
+      $first =~ s,^ (.*),$1,;
+      $last =~ s,\n,,gs;
+
+      $xml =~ s,LAST_NAME,$last,s;
+      $xml =~ s,FIRST_NAME,$first,s;
+      $xml =~ s,EMAIL_ADD,$email,s;
+      $xml =~ s,OTHER_EMAIL,$email_other,s;
+
+      &WriteFile ( $xml, $xmlRecordFile);
+
+      #Issue Command
+      my $cmd = q{curl -H 'Accept: application/xml' -H 'Content-Type: application/vdn.orcid+xml' -H 'Authorization: Bearer } . $token .q{'  '} . $orcid_http . q{' -X POST -d '@} . $xmlRecordFile .q{' -L -i};
+      my $out = `$cmd 2>&1`;
+
+      #Store the response in the db
+      #It will either be an ORCID iD or and error.
+
+      if ( $out =~ m,.*\<error\-desc\>.*?\<.*, )
+	{
+	 $out =~ s,.*\<error\-desc\>(.*?)\<.*,$1,s;
+	 print $email .  "=>" . $out . "\n";
+
+	 my $statement = qq{insert into orcidRecords values ( '$today', '$last', '$first', '$email', '$out' )};
+	 ProcessSQL ( $statement );
+	   
+	}
+      elsif ( $out =~ m,.*Location\: http.*?\/orcid.*, )
+	{
+	  $out =~ s,.*Location\: (http.*?)\/orcid..*,$1,s;
+	  print $email .  "=>" . $out . "\n";
+
+	 my $statement = qq{insert into orcidRecords values ( '$today', '$last', '$first', '$email', '$out' )};
+	 ProcessSQL ( $statement );
+	}
+      else
+	{
+       #Something went wrong.  Output entire response.
+	  $msg .= qq{ERROR: $out \n\n};
+	  print $msg
+	}
+
+    }
+
+  
+  }
+
+sub ReadFile
+{
+    my ( $fileName ) = @_;
+
+    open FH, "<$fileName";
+    binmode FH;
+    my ($bytesRead, $buffer, $chunk);
+    while ( $bytesRead = read(FH, $chunk, 1024) ) 
+    {
+        $buffer .= $chunk;
+    }
+    close FH;
+    
+    return $buffer;
+}
+
+sub WriteFile 
+  {
+    my ( $report, $filename ) = @_;
+
+    #Now you want to create the file
+    open ( OUTFILE, ">$filename" ) || die();
+    print OUTFILE $report;
+    close OUTFILE;
+  }
+
+
+sub CompleteList
+{
+    my ($dir, @list) = @_;
+    
+    my @outdir;
+    
+    foreach my $item (@list)
+    {
+        my $outdir = qq{$dir/$item};
+        push (@outdir, $outdir);
+    }
+    return @outdir;
+}
+
+sub ProcessSQL 
+  {
+    my ( $statement ) = @_;
+
+    my $sth = $dbhP->prepare($statement)
+      or die "Couldn't prepare statement: " . $dbhP->errstr;
+  
+    # Read the matching records and print them out
+    $sth->execute()             # Execute the query
+      or die "Couldn't execute statement: " . $sth->errstr;
+    $sth->finish;
+  }
+
+__END__;
+
+
+
