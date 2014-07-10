@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<orcid-message 
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.orcid.org/ns/orcid https://github.com/ORCID/ORCID-Source/blob/master/orcid-model/src/main/resources/orcid-message-1.1.xsd"
+    xmlns="http://www.orcid.org/ns/orcid">
+    <message-version>1.1</message-version>
+    <orcid-profile>
+        <orcid-bio>
+            <personal-details>
+                <given-names>FIRST_NAME</given-names>
+                <family-name>LAST_NAME</family-name>
+            </personal-details>
+            <contact-details>
+                <email primary="true" visibility="private">EMAIL_ADD</email>
+	        <email primary="false" visibility="private">OTHER_EMAIL</email>
+            </contact-details>
+        </orcid-bio>
+
+	<orcid-activities>
+  	<affiliations>
+    	<affiliation visibility="public">
+      	<type>AFFILIATION_TYPE</type>
+      	<department-name>DEPARTMENT</department-name>
+      <organization>
+         <name>UNIVERSITY</name>
+         <address>
+           <city>CITY</city>
+           <region>STATE</region>
+           <country>COUNTRY</country>
+         </address>
+	<disambiguated-organization>
+           <disambiguated-organization-identifier>ID_CODE</disambiguated-organization-identifier>
+           <disambiguation-source>SOURCE</disambiguation-source>
+         </disambiguated-organization>
+       </organization>
+     </affiliation>
+   </affiliations>
+</orcid-activities>
+    </orcid-profile>
+</orcid-message>
